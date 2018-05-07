@@ -1,6 +1,6 @@
 <launch>
   <!-- px4_ctl node-->
-     <node pkg="px4_ctl" type="px4_ctl" name="px4_ctl" output="screen" >
+     <node pkg="px4_ctl" type="mavros_topic" name="mavros_topic" output="screen" >
      <!--param name=" " value=" " type=" "-->
      <param value="0.0" name="px4start_x" type="double"/>
      <param value="0.0" name="px4start_y" type="double"/>

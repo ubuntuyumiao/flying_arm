@@ -14,17 +14,13 @@
 #include <math.h>
 #include "ctime"
 #include "time.h"
-static int loop=0.0;
-double pos_cov_x=0.0;
-double pos_cov_y=0.0;
-double pos_cov_z=0.0;
 double array_x[] = {0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 
                      10.0, 8.0, 6.0, 4.0, 2.0, 0.0
 } ;
 double array_y[] = {0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 
                      10.0, 8.0, 6.0, 4.0, 2.0, 0.0
 } ;
-ros::Publisher vel_sp_pub;
+
 template<class T>
 int array_length(T& arr)
 {
@@ -32,8 +28,7 @@ int array_length(T& arr)
     //cout << sizeof(arr) << endl;
     return sizeof(arr) / sizeof(arr[0]);
 }
-geometry_msgs::PoseStamped currentPos,nextPos,initCirclePos,initDiscretePos;
-geometry_msgs::TwistStamped vs;
+
 int angle,angleStep;
 int array_num ;
 bool isFly;
@@ -42,6 +37,77 @@ bool hasInitFlyDiscrete;
 float radius;
 float speed;
 
+ros::Publisher local_pos_pub ;
+ros::Publisher vel_sp_pub;
+
+geometry_msgs::PoseStamped currentPos,nextPos,initCirclePos,initDiscretePos;
+geometry_msgs::TwistStamped vs;
+geometry_msgs::TwistStamped local_twist; 
+mavros_msgs::State current_state;
+std_msgs::Float64MultiArray  IMU_Euler ;
+
+void flyto(geometry_msgs::PoseStamped pose_,float speed_)
+{
+  if(!hasInitFlyDiscrete) {
+    initDiscretePos = currentPos;
+    nextPos = pose_;
+    
+    nextPos.pose.position.x = pose_.pose.position.x;
+    nextPos.pose.position.y = pose_.pose.position.y;
+    nextPos.pose.position.z = pose_.pose.position.z;
+ 
+    geometry_msgs::Point velocityVector;
+    velocityVector.x = nextPos.pose.position.x - currentPos.pose.position.x;
+    velocityVector.y = nextPos.pose.position.y - currentPos.pose.position.y;
+    velocityVector.z = nextPos.pose.position.z - currentPos.pose.position.z;
+
+    float length = sqrt(velocityVector.x*velocityVector.x + velocityVector.y*velocityVector.y + velocityVector.z*velocityVector.z );
+    velocityVector.x = velocityVector.x/length * speed_;
+    velocityVector.y = velocityVector.y/length * speed_;
+    velocityVector.z = velocityVector.z/length * speed_;
+
+    vs.twist.linear.x = velocityVector.x;
+    vs.twist.linear.y = velocityVector.y;
+    vs.twist.linear.z = velocityVector.z;
+    vs.header.stamp = ros::Time::now();
+    vel_sp_pub.publish(vs);
+    ROS_INFO_STREAM("next point:" << nextPos.pose.position.x << "  " << nextPos.pose.position.y<< "  "<<nextPos.pose.position.z);
+    hasInitFlyDiscrete = true;
+    return;
+  } 
+  
+  // judge whether is reached
+  double distance = sqrt((currentPos.pose.position.x - nextPos.pose.position.x)*(currentPos.pose.position.x - nextPos.pose.position.x)  + 
+                        ( currentPos.pose.position.y - nextPos.pose.position.y)*(currentPos.pose.position.y - nextPos.pose.position.y) +
+			( currentPos.pose.position.z - nextPos.pose.position.z)*(currentPos.pose.position.z - nextPos.pose.position.z));
+  double threshold = 0.3 ;
+  if (distance < threshold)
+  {
+   // send next pos
+    nextPos = pose_;
+    local_pos_pub.publish<geometry_msgs::PoseStamped>(nextPos);
+  }
+  else{
+    geometry_msgs::Point velocityVector;
+    velocityVector.x = nextPos.pose.position.x - currentPos.pose.position.x;
+    velocityVector.y = nextPos.pose.position.y - currentPos.pose.position.y;
+    velocityVector.z = nextPos.pose.position.z - currentPos.pose.position.z;
+
+    float length = sqrt(velocityVector.x*velocityVector.x + velocityVector.y*velocityVector.y+ velocityVector.z*velocityVector.z);
+    velocityVector.x = velocityVector.x/length * speed_;
+    velocityVector.y = velocityVector.y/length * speed_;
+    velocityVector.z = velocityVector.z/length * speed_;
+
+    vs.twist.linear.x = velocityVector.x;
+    vs.twist.linear.y = velocityVector.y;
+    vs.twist.linear.z = velocityVector.z;
+    vs.header.stamp = ros::Time::now();
+    vel_sp_pub.publish(vs);
+    
+    ROS_INFO_STREAM("next point:" << nextPos.pose.position.x << "  " << nextPos.pose.position.y<< "  "<<nextPos.pose.position.z);
+    ROS_INFO_STREAM("curr vel:" << vs.twist.linear.x << "  " << vs.twist.linear.y<< "  "<<vs.twist.linear.z);
+  }
+}
 void flydiscrete(double speed)
 {
   if(!hasInitFlyDiscrete) {
@@ -138,7 +204,7 @@ void flyCircleWithRadius(double r,double speed)
   bool isReached = false;
   double distance = sqrt((currentPos.pose.position.x - nextPos.pose.position.x)*(currentPos.pose.position.x - nextPos.pose.position.x)  + 
                        (currentPos.pose.position.y - nextPos.pose.position.y)*(currentPos.pose.position.y - nextPos.pose.position.y));
-  double threshold = 0.2;
+  double threshold = 0.4;
   if (distance < threshold)
   {
     isReached = true;
@@ -172,18 +238,12 @@ void flyCircleWithRadius(double r,double speed)
  
   
 }
-geometry_msgs::PoseStamped pose;
-geometry_msgs::TwistStamped local_twist;
-    
-mavros_msgs::State current_state;
-std_msgs::Float64MultiArray  IMU_Euler ;
 //给定一个单位长度的旋转轴(x, y, z)和一个角度θ。对应的四元数为：
 //q=((x,y,z)sinθ2, cosθ2) 
-
-geometry_msgs::PoseStamped set_localxyz(geometry_msgs::PoseStamped pose_,
-		  double x, double y, double z, 
+geometry_msgs::PoseStamped set_localxyz( double x, double y, double z, 
 		  double ori_x, double ori_y, double ori_z, double ori_w)
 {
+  geometry_msgs::PoseStamped pose_ ;
     pose_.pose.position.x = x;
     pose_.pose.position.y = y;
     pose_.pose.position.z = z;
@@ -202,7 +262,7 @@ void state_cb(const mavros_msgs::State::ConstPtr& msg){
 }
 void qua_callback(const sensor_msgs::Imu::ConstPtr& imu_msg)
 {
-    //quaternion to erlue angle
+  //quaternion to erlue angle
 
   IMU_Euler.data.resize(3);
   IMU_Euler.data[0]= 180.0/3.1415926 * atan(2*(imu_msg->orientation.w*imu_msg->orientation.x+imu_msg->orientation.y*imu_msg->orientation.z)
@@ -219,28 +279,6 @@ void qua_callback(const sensor_msgs::Imu::ConstPtr& imu_msg)
 //		  "Euler_y"  << IMU_Euler.data[0]);
 
 }
-void pos_callback(const nav_msgs::Odometry::ConstPtr& pos_msg)
-{
-      static int tim=0;
-      static double error_pos=0.0;
-      static double last_error_pos=0.0;
-      pos_cov_x=pos_msg->pose.pose.position.x - pose.pose.position.x;
-      pos_cov_y=pos_msg->pose.pose.position.y - pose.pose.position.y;
-      pos_cov_z=pos_msg->pose.pose.position.z - pose.pose.position.z;
-      error_pos = pos_cov_x*pos_cov_x + pos_cov_y*pos_cov_y + pos_cov_z*pos_cov_z ;
-    //  ROS_INFO("LOSS :%f ", sqrt(error_pos)) ; 
-      if(error_pos <= 0.7) 
-      {
-	if(tim == 13) tim=0;
-	//pose = set_localxyz(pose , array_x[tim],
-               //      sqrt(36.0 -  (array_x[tim]- 6.0)*(array_x[tim]-6.0)),3.0, 
-               //      0, 0, 0, 1
-	//);
-	tim ++ ;
-      }
-      last_error_pos = error_pos ;
-
-}
 int main(int argc, char **argv)
 {
     ros::init(argc, argv, "mavros_topic");
@@ -248,13 +286,12 @@ int main(int argc, char **argv)
 //------------------订阅、发布话题------------------
     ros::Subscriber state_sub= nh.subscribe<mavros_msgs::State>("/mavros/state", 5,state_cb);
     ros::Subscriber imu_sub = nh.subscribe<sensor_msgs::Imu>("mavros/imu/data",5,qua_callback);
-    ros::Subscriber pos_sub = nh.subscribe<nav_msgs::Odometry>("/mavros/local_position/odom",5,pos_callback);
     
     ros::Subscriber localPositionSubsciber = nh.subscribe("/mavros/local_position/pose", 5, localPositionReceived);
     
     vel_sp_pub = nh.advertise<geometry_msgs::TwistStamped>("/mavros/setpoint_velocity/cmd_vel", 10);
   
-    ros::Publisher local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>
+    local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>
             ("/mavros/setpoint_position/local", 1);
     ros::Publisher local_vel_pub = nh.advertise<geometry_msgs::TwistStamped>
 	    ("/mavros/setpoint_velocity/cmd_vel",1);
@@ -274,7 +311,7 @@ int main(int argc, char **argv)
   angle = 0;
   radius = 3;
   angleStep = 5;
-  speed = 3.5;
+  speed = 1.2;
 //------------------消息过滤器同步------------------
    /*  typedef message_filters::sync_policies::ApproximateTime
      <
@@ -308,12 +345,13 @@ int main(int argc, char **argv)
     nh_param.param<double>("px4start_oriw", px4start_oriw, 1.0);
     }
     
-
+    ros::Rate rate(20.0);
     geometry_msgs::Twist turtle1sim;
-    pose = set_localxyz(pose, px4start_x, px4start_y, px4start_z,
+    geometry_msgs::PoseStamped pose;
+    pose = set_localxyz(px4start_x, px4start_y, px4start_z,
       px4start_orix, px4start_oriy, px4start_oriz, px4start_oriw
     );
-    ros::Rate rate(20.0);
+    
     mavros_msgs::SetMode offb_set_mode;   
     mavros_msgs::CommandBool arm_cmd;
 //------------------连接到pixhawk------------------
@@ -363,11 +401,20 @@ int main(int argc, char **argv)
       nh_param.getParam("px4start_oriz",px4start_oriz);
       nh_param.getParam("px4start_oriw",px4start_oriw);
 
-
+    geometry_msgs::PoseStamped pose_tar ;
     array_num = 0;
     while(ros::ok())
     {
-       vs.header.seq++;
+      nh_param.getParam("px4start_x",px4start_x);
+      nh_param.getParam("px4start_y",px4start_y);
+      nh_param.getParam("px4start_z",px4start_z);
+      
+      nh_param.getParam("px4start_orix",px4start_orix);
+      nh_param.getParam("px4start_oriy",px4start_oriy);
+      nh_param.getParam("px4start_oriz",px4start_oriz);
+      nh_param.getParam("px4start_oriw",px4start_oriw);
+
+      vs.header.seq++;
       if((ros::Time::now()- last_time_record )< ros::Duration(10.0))
 	  local_pos_pub.publish(pose);
       else{
@@ -378,10 +425,14 @@ int main(int argc, char **argv)
         vel_sp_pub.publish(vs);
 	isFly = true ;
       } else 
-	flydiscrete(speed);
-	 //flyCircleWithRadius(radius,speed);
+      {
+      pose = set_localxyz(6,6,6,
+			  0,0,0,1) ;
+      flyto(pose,speed);
+      //flydiscrete(speed);
+      //flyCircleWithRadius(radius,speed);
       
-      
+      }
       }
       //pose.header.stamp = ros::Time::now() ;
     
