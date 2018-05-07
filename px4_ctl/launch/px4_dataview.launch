@@ -1,0 +1,12 @@
+<launch>
+  <!-- view data         /mavros/imu/data/angular_velocity 
+                         /mavros/imu/data/linear_acceleration
+                         -->
+    <node pkg="rqt_plot" type="rqt_plot" name="px4_ctl" output="screen" >
+      <param name="topics" value="/mavros/imu/data/linear_acceleration" />
+    </node>	
+
+
+
+
+</launch>
